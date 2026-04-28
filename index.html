@@ -323,6 +323,7 @@ export default function SimuladorInterseccionProyectiles() {
   const [shots, setShots] = useState(0);
   const [relation, setRelation] = useState("trajectory");
   const [showTableAroundTarget, setShowTableAroundTarget] = useState(true);
+  const [explosion, setExplosion] = useState(null);
   const requestRef = useRef(null);
   const startRef = useRef(null);
 
@@ -362,6 +363,22 @@ export default function SimuladorInterseccionProyectiles() {
   }, [family]);
 
   useEffect(() => {
+    if (running && projectile && currentDistance <= 0.45 && !explosion) {
+      const palette = ["#ffffff", "#fef08a", "#facc15", "#fb923c", "#fb7185", "#67e8f9"];
+      const particles = Array.from({ length: 70 }, (_, i) => ({
+        id: i,
+        angle: (Math.PI * 2 * i) / 70 + (Math.random() - 0.5) * 0.45,
+        distance: 45 + Math.random() * 135,
+        size: 3 + Math.random() * 8,
+        duration: 0.75 + Math.random() * 0.45,
+        delay: Math.random() * 0.08,
+        color: palette[i % palette.length],
+      }));
+      setExplosion({ key: Date.now(), x: target.x, y: target.y, particles });
+    }
+  }, [running, projectile, currentDistance, explosion, target.x, target.y]);
+
+  useEffect(() => {
     if (!running) return;
     const duration = 3600;
     const animate = (time) => {
@@ -391,6 +408,7 @@ export default function SimuladorInterseccionProyectiles() {
   const fire = () => {
     startRef.current = null;
     setProgress(0);
+    setExplosion(null);
     setRunning(true);
   };
 
@@ -398,6 +416,7 @@ export default function SimuladorInterseccionProyectiles() {
   const reset = () => {
     setRunning(false);
     setProgress(0);
+    setExplosion(null);
     setParams(def.defaultParams);
   };
 
@@ -406,6 +425,7 @@ export default function SimuladorInterseccionProyectiles() {
     const y = Number((Math.random() * 12 - 4).toFixed(1));
     setTarget({ x, y });
     setProgress(0);
+    setExplosion(null);
     setRunning(false);
   };
 
@@ -637,15 +657,78 @@ export default function SimuladorInterseccionProyectiles() {
                   )}
 
                   <AnimatePresence>
-                    {isHit && progress > 0.82 && (
+                    {explosion && (
                       <motion.g
-                        initial={{ opacity: 0, scale: 0.5 }}
-                        animate={{ opacity: 1, scale: 1 }}
+                        key={explosion.key}
+                        initial={{ opacity: 1 }}
+                        animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        style={{ transformOrigin: `${mapX(target.x)}px ${mapY(target.y)}px` }}
                       >
-                        <circle cx={mapX(target.x)} cy={mapY(target.y)} r="48" fill="rgba(250,204,21,.25)" stroke="#facc15" strokeWidth="5" />
-                        <text x={mapX(target.x) - 58} y={mapY(target.y) - 55} fill="#fde68a" fontSize="24" fontWeight="900">¡Impacto!</text>
+                        <motion.circle
+                          cx={mapX(explosion.x)}
+                          cy={mapY(explosion.y)}
+                          r="18"
+                          fill="rgba(255,255,255,.95)"
+                          initial={{ scale: 0.2, opacity: 1 }}
+                          animate={{ scale: [0.2, 2.6, 5.2], opacity: [1, 0.8, 0] }}
+                          transition={{ duration: 0.85 }}
+                          filter="url(#glow)"
+                        />
+                        <motion.circle
+                          cx={mapX(explosion.x)}
+                          cy={mapY(explosion.y)}
+                          r="38"
+                          fill="none"
+                          stroke="#facc15"
+                          strokeWidth="7"
+                          initial={{ scale: 0.15, opacity: 1 }}
+                          animate={{ scale: [0.15, 1.45, 2.4], opacity: [1, 0.65, 0] }}
+                          transition={{ duration: 1.05 }}
+                        />
+                        <motion.circle
+                          cx={mapX(explosion.x)}
+                          cy={mapY(explosion.y)}
+                          r="58"
+                          fill="none"
+                          stroke="#fb7185"
+                          strokeWidth="5"
+                          initial={{ scale: 0.1, opacity: 1 }}
+                          animate={{ scale: [0.1, 1.25, 2.2], opacity: [1, 0.55, 0] }}
+                          transition={{ duration: 1.2, delay: 0.08 }}
+                        />
+                        {explosion.particles.map((p) => (
+                          <motion.circle
+                            key={p.id}
+                            cx={mapX(explosion.x)}
+                            cy={mapY(explosion.y)}
+                            r={p.size}
+                            fill={p.color}
+                            filter="url(#glow)"
+                            initial={{ x: 0, y: 0, scale: 0.25, opacity: 1 }}
+                            animate={{
+                              x: Math.cos(p.angle) * p.distance,
+                              y: Math.sin(p.angle) * p.distance,
+                              scale: [0.25, 1, 0],
+                              opacity: [1, 0.9, 0],
+                            }}
+                            transition={{ duration: p.duration, delay: p.delay, ease: "easeOut" }}
+                          />
+                        ))}
+                        <motion.text
+                          x={mapX(explosion.x) - 70}
+                          y={mapY(explosion.y) - 72}
+                          fill="#fef3c7"
+                          fontSize="28"
+                          fontWeight="900"
+                          stroke="#0f172a"
+                          strokeWidth="5"
+                          paintOrder="stroke"
+                          initial={{ opacity: 0, y: 12, scale: 0.7 }}
+                          animate={{ opacity: [0, 1, 1, 0], y: [12, 0, -8, -20], scale: [0.7, 1.15, 1.05, 0.95] }}
+                          transition={{ duration: 1.25 }}
+                        >
+                          ¡IMPACTO!
+                        </motion.text>
                       </motion.g>
                     )}
                   </AnimatePresence>
@@ -765,5 +848,3 @@ export default function SimuladorInterseccionProyectiles() {
     </div>
   );
 }
-
-  
