@@ -1,998 +1,769 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Función Impacto - Simulador Didáctico</title>
-  <style>
-    :root{
-      --bg1:#071426;
-      --bg2:#0d2038;
-      --panel:rgba(255,255,255,.08);
-      --panel2:rgba(255,255,255,.12);
-      --line:#2ee6ff;
-      --line2:#ff7cf5;
-      --accent:#6ef8b8;
-      --warn:#ffd86f;
-      --danger:#ff778f;
-      --text:#eef6ff;
-      --muted:#b2c2d6;
-      --border:rgba(255,255,255,.18);
-      --shadow:0 18px 38px rgba(0,0,0,.35);
-      --radius:22px;
-      --canvas-bg:#08111f;
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  Activity,
+  BarChart3,
+  Calculator,
+  Crosshair,
+  Gauge,
+  Pause,
+  Play,
+  RefreshCw,
+  Sparkles,
+  Table2,
+  Target,
+  Trophy,
+} from "lucide-react";
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const fmt = (n, d = 2) => {
+  if (!Number.isFinite(n)) return "—";
+  const s = Number(n).toFixed(d);
+  return s.replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+};
+const signText = (n) => (n >= 0 ? `+ ${fmt(n)}` : `− ${fmt(Math.abs(n))}`);
+
+const VIEW = {
+  xMin: -10,
+  xMax: 10,
+  yMin: -8,
+  yMax: 12,
+  w: 920,
+  h: 520,
+};
+
+const families = {
+  lineal: {
+    name: "Lineal",
+    colorHint: "Pendiente constante",
+    base: "g(u)=u",
+    defaultParams: { a: 1, b: 1, h: 0, k: 0 },
+    eval: (x, p) => p.a * (p.b * (x - p.h)) + p.k,
+    formula: (p) => `y = ${fmt(p.a)} · [${fmt(p.b)}(x ${signText(-p.h)})] ${signText(p.k)}`,
+    help: "Controla la pendiente con a y b. h desplaza horizontalmente y k verticalmente.",
+  },
+  cuadratica: {
+    name: "Cuadrática / parabólica",
+    colorHint: "Trayectoria parabólica",
+    base: "g(u)=u²",
+    defaultParams: { a: 0.35, b: 1, h: 0, k: 0 },
+    eval: (x, p) => p.a * Math.pow(p.b * (x - p.h), 2) + p.k,
+    formula: (p) => `y = ${fmt(p.a)} · [${fmt(p.b)}(x ${signText(-p.h)})]² ${signText(p.k)}`,
+    help: "a define apertura y orientación. h mueve el vértice a izquierda/derecha. k lo sube o baja.",
+  },
+  sinusoidal: {
+    name: "Sinusoidal",
+    colorHint: "Onda periódica",
+    base: "g(u)=sen(u)",
+    defaultParams: { a: 4, b: 1, h: 0, k: 0 },
+    eval: (x, p) => p.a * Math.sin(p.b * (x - p.h)) + p.k,
+    formula: (p) => `y = ${fmt(p.a)} · sen(${fmt(p.b)}(x ${signText(-p.h)})) ${signText(p.k)}`,
+    help: "a es amplitud, b cambia la frecuencia, h desplaza la fase y k mueve la línea media.",
+  },
+  exponencial: {
+    name: "Exponencial",
+    colorHint: "Crecimiento/caída acelerada",
+    base: "g(u)=eᵘ",
+    defaultParams: { a: 0.7, b: 0.35, h: 0, k: 0 },
+    eval: (x, p) => {
+      const y = p.a * Math.exp(clamp(p.b * (x - p.h), -7, 7)) + p.k;
+      return Math.abs(y) > 1e4 ? NaN : y;
+    },
+    formula: (p) => `y = ${fmt(p.a)} · e^(${fmt(p.b)}(x ${signText(-p.h)})) ${signText(p.k)}`,
+    help: "b regula la rapidez de crecimiento. a refleja o escala. k marca una asíntota horizontal aproximada.",
+  },
+  raiz: {
+    name: "Raíz cuadrada",
+    colorHint: "Dominio restringido",
+    base: "g(u)=√u",
+    defaultParams: { a: 2.2, b: 1, h: -4, k: -2 },
+    eval: (x, p) => {
+      const u = p.b * (x - p.h);
+      if (u < 0) return NaN;
+      return p.a * Math.sqrt(u) + p.k;
+    },
+    formula: (p) => `y = ${fmt(p.a)} · √(${fmt(p.b)}(x ${signText(-p.h)})) ${signText(p.k)}`,
+    help: "La gráfica empieza donde el radicando es 0. h cambia el punto inicial; a estira o refleja.",
+  },
+  absoluta: {
+    name: "Valor absoluto",
+    colorHint: "Forma de V",
+    base: "g(u)=|u|",
+    defaultParams: { a: 0.8, b: 1, h: 0, k: 0 },
+    eval: (x, p) => p.a * Math.abs(p.b * (x - p.h)) + p.k,
+    formula: (p) => `y = ${fmt(p.a)} · |${fmt(p.b)}(x ${signText(-p.h)})| ${signText(p.k)}`,
+    help: "h mueve el vértice; k cambia la altura; a controla apertura y reflexión.",
+  },
+  cubica: {
+    name: "Cúbica",
+    colorHint: "Curva en S",
+    base: "g(u)=u³",
+    defaultParams: { a: 0.05, b: 1, h: 0, k: 0 },
+    eval: (x, p) => p.a * Math.pow(p.b * (x - p.h), 3) + p.k,
+    formula: (p) => `y = ${fmt(p.a)} · [${fmt(p.b)}(x ${signText(-p.h)})]³ ${signText(p.k)}`,
+    help: "Con h=0 y k=0 suele comportarse como impar. a controla intensidad y dirección.",
+  },
+};
+
+const relationExamples = {
+  trajectory: {
+    name: "Trayectoria actual",
+    isFunction: true,
+    reason: "Para cada valor de x se calcula un único valor de y dentro del dominio.",
+  },
+  circle: {
+    name: "Circunferencia",
+    isFunction: false,
+    reason: "Algunas rectas verticales cortan la relación en dos puntos: un mismo x tiene dos valores de y.",
+  },
+  sideways: {
+    name: "Parábola horizontal",
+    isFunction: false,
+    reason: "La relación x = y² no supera la prueba de la recta vertical.",
+  },
+  discreteBad: {
+    name: "Pares repetidos",
+    isFunction: false,
+    reason: "El mismo valor x=2 aparece asociado a dos salidas distintas.",
+  },
+  discreteGood: {
+    name: "Tabla válida",
+    isFunction: true,
+    reason: "Ninguna entrada x se repite con salidas diferentes.",
+  },
+};
+
+function sampleCurve(familyKey, params, n = 700) {
+  const def = families[familyKey];
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const x = VIEW.xMin + (i / n) * (VIEW.xMax - VIEW.xMin);
+    const y = def.eval(x, params);
+    if (Number.isFinite(y)) pts.push({ x, y });
+    else pts.push(null);
+  }
+  return pts;
+}
+
+function validSegments(points) {
+  const segments = [];
+  let current = [];
+  points.forEach((p) => {
+    if (p && Number.isFinite(p.y) && p.y > VIEW.yMin - 25 && p.y < VIEW.yMax + 25) {
+      current.push(p);
+    } else if (current.length) {
+      segments.push(current);
+      current = [];
     }
-    *{box-sizing:border-box}
-    html,body{margin:0;padding:0;height:100%;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif;background:radial-gradient(circle at top left,#16325d 0%,var(--bg2) 28%,#071426 100%);color:var(--text)}
-    body{overflow-x:hidden}
-    .shell{max-width:1600px;margin:0 auto;padding:18px;display:flex;flex-direction:column;gap:18px}
-    .hero{background:linear-gradient(135deg,rgba(19,32,59,.92),rgba(9,18,32,.85));border:1px solid var(--border);box-shadow:var(--shadow);border-radius:30px;padding:20px 22px;display:grid;grid-template-columns:1.5fr .9fr;gap:18px;position:relative;overflow:hidden}
-    .hero:before{content:"";position:absolute;inset:-40% auto auto -10%;width:420px;height:420px;background:radial-gradient(circle,rgba(46,230,255,.22),transparent 65%);pointer-events:none}
-    .hero h1{margin:0;font-size:clamp(28px,4vw,46px);line-height:1.02;letter-spacing:.2px}
-    .hero p{margin:10px 0 0;color:var(--muted);font-size:15px;line-height:1.55;max-width:900px}
-    .badge{display:inline-flex;align-items:center;gap:10px;background:rgba(110,248,184,.12);border:1px solid rgba(110,248,184,.4);color:#caffec;padding:8px 12px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:12px}
-    .heroStats{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;align-content:start}
-    .stat{background:var(--panel);border:1px solid var(--border);border-radius:20px;padding:14px 16px}
-    .stat .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.11em}
-    .stat .v{font-size:29px;font-weight:800;margin-top:8px}
-    .grid{display:grid;grid-template-columns:390px 1fr;gap:18px}
-    .left,.right{display:flex;flex-direction:column;gap:18px}
-    .panel{background:linear-gradient(180deg,rgba(255,255,255,.09),rgba(255,255,255,.06));border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px;backdrop-filter:blur(10px)}
-    .panel h2,.panel h3{margin:0 0 12px 0;font-size:19px}
-    .sub{color:var(--muted);font-size:13px;line-height:1.45;margin-top:-4px;margin-bottom:10px}
-    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-    .row > *{min-width:0}
-    label.lbl{display:block;font-size:13px;font-weight:700;color:#dce9f8;margin-bottom:5px}
-    .control{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);padding:10px 12px;border-radius:16px;margin-bottom:10px}
-    select,input[type="number"],input[type="text"],textarea{width:100%;background:rgba(4,10,18,.72);color:var(--text);border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:10px 12px;font-size:14px;outline:none}
-    textarea{resize:vertical;min-height:76px}
-    input[type="range"]{width:100%}
-    .pair{display:grid;grid-template-columns:1fr 90px;gap:10px;align-items:center}
-    .btnRow{display:flex;gap:10px;flex-wrap:wrap}
-    button{border:none;border-radius:14px;padding:11px 16px;font-weight:800;cursor:pointer;transition:.2s transform,.2s opacity,.2s filter;background:#133356;color:var(--text)}
-    button:hover{transform:translateY(-1px);filter:brightness(1.07)}
-    .primary{background:linear-gradient(90deg,#16b2ff,#a93fff)}
-    .success{background:linear-gradient(90deg,#0cc984,#26e6d1);color:#03221b}
-    .warning{background:linear-gradient(90deg,#ffcf5c,#ff9a59);color:#382204}
-    .danger{background:linear-gradient(90deg,#ff7999,#ff4d7a)}
-    .mutedBtn{background:rgba(255,255,255,.08)}
-    .formula{font-family:ui-monospace,Consolas,monospace;background:rgba(4,10,18,.76);border:1px solid rgba(255,255,255,.12);padding:12px 14px;border-radius:16px;font-size:15px;line-height:1.45;word-break:break-word}
-    .canvasWrap{padding:0;overflow:hidden}
-    #scene{display:block;width:100%;height:min(720px,70vh);background:linear-gradient(180deg,#07111d,#0a1628 32%,#07111d 100%)}
-    .hud{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:14px 16px}
-    .hud .card{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:12px}
-    .hud .label{font-size:11px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase}
-    .hud .big{font-size:22px;font-weight:800;margin-top:6px}
-    .statusGood{color:#88ffd0}.statusWarn{color:#ffd987}.statusBad{color:#ff9cad}
-    .miniGrid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-    .tableWrap{overflow:auto;border:1px solid rgba(255,255,255,.12);border-radius:16px}
-    table{width:100%;border-collapse:collapse;font-size:13px}
-    th,td{padding:10px 12px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left}
-    thead th{background:rgba(255,255,255,.09);position:sticky;top:0}
-    .pill{display:inline-flex;align-items:center;gap:8px;border-radius:999px;padding:8px 12px;font-size:12px;font-weight:700;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06)}
-    .pill.good{background:rgba(16,214,150,.15);border-color:rgba(16,214,150,.35);color:#baffea}
-    .pill.bad{background:rgba(255,96,130,.13);border-color:rgba(255,96,130,.35);color:#ffd5df}
-    .list{display:flex;flex-direction:column;gap:8px}
-    .listItem{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);padding:10px 12px;border-radius:12px;font-size:13px}
-    .avatarCard{display:grid;grid-template-columns:135px 1fr;gap:12px;align-items:center}
-    .avatarBox{background:radial-gradient(circle at 50% 28%,rgba(255,255,255,.16),rgba(255,255,255,.04));border:1px solid rgba(255,255,255,.12);border-radius:18px;padding:12px}
-    .legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
-    .sw{width:16px;height:4px;border-radius:999px;display:inline-block}
-    .polyCoeffs{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
-    .small{font-size:12px;color:var(--muted)}
-    .footerNote{font-size:12px;color:var(--muted);text-align:center;padding:8px 0 4px}
-    .hidden{display:none !important}
-    .sectionTitle{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
-    .toggleRow{display:flex;gap:8px;flex-wrap:wrap}
-    .tag{font-size:11px;color:var(--muted);background:rgba(255,255,255,.05);padding:5px 9px;border-radius:999px;border:1px solid rgba(255,255,255,.08)}
-    @media (max-width:1220px){
-      .grid{grid-template-columns:1fr}
-      .hero{grid-template-columns:1fr}
-      .miniGrid{grid-template-columns:1fr}
-      .avatarCard{grid-template-columns:1fr}
+  });
+  if (current.length) segments.push(current);
+  return segments;
+}
+
+function detectParity(familyKey, params) {
+  const def = families[familyKey];
+  const xs = Array.from({ length: 81 }, (_, i) => -8 + i * 0.2).filter((x) => Math.abs(x) > 1e-9);
+  let checked = 0;
+  let evenMax = 0;
+  let oddMax = 0;
+  for (const x of xs) {
+    const y1 = def.eval(x, params);
+    const y2 = def.eval(-x, params);
+    if (!Number.isFinite(y1) || !Number.isFinite(y2)) continue;
+    checked++;
+    const scale = 1 + Math.abs(y1) + Math.abs(y2);
+    evenMax = Math.max(evenMax, Math.abs(y2 - y1) / scale);
+    oddMax = Math.max(oddMax, Math.abs(y2 + y1) / scale);
+  }
+  if (checked < 20) return { label: "Ninguna", reason: "El dominio no es suficientemente simétrico para ser par o impar." };
+  if (evenMax < 0.015) return { label: "Par", reason: "Se cumple aproximadamente f(−x)=f(x). La gráfica es simétrica respecto al eje y." };
+  if (oddMax < 0.015) return { label: "Impar", reason: "Se cumple aproximadamente f(−x)=−f(x). La gráfica es simétrica respecto al origen." };
+  return { label: "Ninguna", reason: "No cumple simetría par ni simetría impar en el intervalo observado." };
+}
+
+function growthIntervals(familyKey, params) {
+  const def = families[familyKey];
+  const xs = Array.from({ length: 360 }, (_, i) => VIEW.xMin + (i / 359) * (VIEW.xMax - VIEW.xMin));
+  const rows = xs.map((x) => ({ x, y: def.eval(x, params) })).filter((r) => Number.isFinite(r.y));
+  if (rows.length < 3) return [];
+  const pieces = [];
+  let start = rows[0].x;
+  let lastSign = 0;
+  const eps = 0.015;
+  for (let i = 1; i < rows.length; i++) {
+    const dy = rows[i].y - rows[i - 1].y;
+    const dx = rows[i].x - rows[i - 1].x;
+    const slope = dy / dx;
+    const s = slope > eps ? 1 : slope < -eps ? -1 : 0;
+    if (lastSign === 0) lastSign = s;
+    if (s !== 0 && lastSign !== 0 && s !== lastSign) {
+      pieces.push({ from: start, to: rows[i - 1].x, sign: lastSign });
+      start = rows[i - 1].x;
+      lastSign = s;
+    } else if (s !== 0) {
+      lastSign = s;
     }
-    @media (max-width:760px){
-      .hud{grid-template-columns:repeat(2,1fr)}
-      .polyCoeffs{grid-template-columns:1fr}
-    }
-  </style>
-</head>
-<body>
-  <div class="shell">
-    <section class="hero">
-      <div>
-        <div class="badge">Simulador inmersivo · Funciones y trayectorias</div>
-        <h1>Función Impacto</h1>
-        <p>
-          Laboratorio didáctico para modelar trayectorias con funciones clásicas. El operario ajusta parámetros,
-          lanza un proyectil, analiza fórmula-tabla-gráfica, identifica si la relación es función, determina
-          intervalos de crecimiento y decrecimiento, y verifica paridad con blancos espejo.
-        </p>
-        <div class="legend">
-          <span class="pill"><span class="sw" style="background:#2ee6ff"></span> Trayectoria</span>
-          <span class="pill"><span class="sw" style="background:#ffd86f"></span> Blanco principal</span>
-          <span class="pill"><span class="sw" style="background:#ff7cf5"></span> Blanco espejo/paridad</span>
-          <span class="pill"><span class="sw" style="background:#6ef8b8"></span> Proyectil</span>
+  }
+  pieces.push({ from: start, to: rows[rows.length - 1].x, sign: lastSign });
+  return pieces
+    .filter((p) => Math.abs(p.to - p.from) > 0.35)
+    .slice(0, 6)
+    .map((p) => ({ ...p, type: p.sign > 0 ? "Creciente" : p.sign < 0 ? "Decreciente" : "Aprox. constante" }));
+}
+
+function minDistanceToTarget(points, target) {
+  let best = Infinity;
+  for (const p of points) {
+    if (!p || !Number.isFinite(p.y)) continue;
+    const d = Math.hypot(p.x - target.x, p.y - target.y);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+function buildPath(segment, mapX, mapY) {
+  if (!segment.length) return "";
+  return segment.map((p, i) => `${i === 0 ? "M" : "L"} ${mapX(p.x)} ${mapY(p.y)}`).join(" ");
+}
+
+function ParameterSlider({ label, value, min, max, step, onChange, hint }) {
+  return (
+    <div className="space-y-1 rounded-2xl border border-slate-200 bg-white/80 p-3 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-slate-800">{label}</div>
+          <div className="text-xs text-slate-500">{hint}</div>
         </div>
+        <div className="rounded-xl bg-slate-900 px-2.5 py-1 text-sm font-bold text-white">{fmt(value, 2)}</div>
       </div>
-      <div class="heroStats">
-        <div class="stat"><div class="k">Puntaje</div><div class="v" id="scoreValue">0</div></div>
-        <div class="stat"><div class="k">Disparos</div><div class="v" id="shotsValue">0</div></div>
-        <div class="stat"><div class="k">Distancia mínima</div><div class="v" id="distanceValue">—</div></div>
-        <div class="stat"><div class="k">Diagnóstico</div><div class="v" id="statusValue" style="font-size:18px">Esperando ajustes</div></div>
-      </div>
-    </section>
-
-    <div class="grid">
-      <aside class="left">
-        <section class="panel">
-          <div class="sectionTitle">
-            <h2>1) Modo de operación</h2>
-            <span class="tag">juego + análisis</span>
-          </div>
-          <div class="control">
-            <label class="lbl" for="functionType">Tipo de función</label>
-            <select id="functionType">
-              <option value="lineal">Lineal · y = mx + b</option>
-              <option value="cuadratica" selected>Cuadrática · y = c(x-h)^2 + k</option>
-              <option value="polinomica">Polinómica · y = aₙxⁿ + ... + a₁x + a₀</option>
-              <option value="exponencial">Exponencial · y = a^x + k</option>
-              <option value="raiz">Raíz n-ésima · y = c(x-h)^(1/n) + k</option>
-              <option value="sinusoidal">Sinusoidal · y = A·sen(B(x-h)) + k</option>
-              <option value="absoluta">Valor absoluto · y = a|x-h| + k</option>
-              <option value="cubica">Cúbica · y = c(x-h)^3 + k</option>
-              <option value="tramos">A tramos · dos ramas lineales</option>
-            </select>
-          </div>
-          <div class="control">
-            <label class="lbl" for="relationMode">Analogía relación/función</label>
-            <select id="relationMode">
-              <option value="actual">Misil balístico actual (sí es función)</option>
-              <option value="guidedLoop">Misil teledirigido en bucle (no es función)</option>
-              <option value="horizontalParabola">Trayectoria lateral (no es función)</option>
-              <option value="pointValid">Comandos discretos válidos (sí es función)</option>
-              <option value="pointInvalid">Comandos discretos inválidos (no es función)</option>
-            </select>
-            <div class="small" id="relationBlurb" style="margin-top:8px"></div>
-          </div>
-          <div class="toggleRow">
-            <button id="fireBtn" class="success">Disparar</button>
-            <button id="randomTargetBtn" class="primary">Nuevo blanco</button>
-            <button id="resetScoreBtn" class="warning">Reiniciar puntaje</button>
-            <button id="resetParamsBtn" class="mutedBtn">Restaurar parámetros</button>
-          </div>
-        </section>
-
-        <section class="panel" id="paramsPanel">
-          <div class="sectionTitle">
-            <h2>2) Parámetros de la función</h2>
-            <span class="tag">slider + teclado</span>
-          </div>
-          <div class="sub">Puedes ingresar valores con barras y también escribiéndolos manualmente.</div>
-          <div id="paramControls"></div>
-          <div id="polyControls" class="hidden">
-            <div class="control">
-              <label class="lbl" for="polyDegree">Grado n</label>
-              <div class="pair">
-                <input id="polyDegreeRange" type="range" min="0" max="6" step="1" value="3">
-                <input id="polyDegree" type="number" min="0" max="6" step="1" value="3">
-              </div>
-            </div>
-            <div class="polyCoeffs" id="polyCoeffWrap"></div>
-          </div>
-          <div id="piecewiseControls" class="hidden"></div>
-        </section>
-
-        <section class="panel">
-          <div class="sectionTitle">
-            <h2>3) Blancos y laboratorio de paridad</h2>
-            <span class="tag">dos blancos espejo</span>
-          </div>
-          <div class="control">
-            <label class="lbl">Blanco principal</label>
-            <div class="row">
-              <div style="flex:1 1 120px">
-                <label class="lbl" for="targetX">x</label>
-                <input id="targetX" type="number" step="0.1" value="4">
-              </div>
-              <div style="flex:1 1 120px">
-                <label class="lbl" for="targetY">y</label>
-                <input id="targetY" type="number" step="0.1" value="3">
-              </div>
-            </div>
-          </div>
-          <div class="control">
-            <label class="lbl">Blanco espejo para paridad</label>
-            <div class="row">
-              <div style="flex:1 1 120px">
-                <label class="lbl" for="probeX">x de prueba</label>
-                <input id="probeX" type="number" step="0.1" value="2">
-              </div>
-              <div style="flex:1 1 160px">
-                <label class="lbl" for="parityMode">Comparar como</label>
-                <select id="parityMode">
-                  <option value="even">Par: f(-x) = f(x)</option>
-                  <option value="odd">Impar: f(-x) = -f(x)</option>
-                </select>
-              </div>
-            </div>
-            <div class="small" id="parityHint" style="margin-top:8px"></div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="sectionTitle">
-            <h2>4) Operario de campo</h2>
-            <span class="tag">avatar</span>
-          </div>
-          <div class="avatarCard">
-            <div class="avatarBox">
-              <svg viewBox="0 0 180 220" width="100%" aria-label="Operario con uniforme, gafas y orejeras">
-                <defs>
-                  <linearGradient id="uni" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0%" stop-color="#26c6ff"/>
-                    <stop offset="100%" stop-color="#0d7ec7"/>
-                  </linearGradient>
-                </defs>
-                <rect x="56" y="148" width="68" height="54" rx="18" fill="url(#uni)" stroke="rgba(255,255,255,.45)"/>
-                <rect x="70" y="180" width="40" height="18" rx="7" fill="#0c426a" opacity=".55"/>
-                <circle cx="90" cy="84" r="42" fill="#f0c59a" stroke="rgba(255,255,255,.35)"/>
-                <path d="M53 84a37 37 0 0 1 74 0" fill="#20344a"/>
-                <rect x="49" y="80" width="12" height="36" rx="6" fill="#ff8ba6"/>
-                <rect x="119" y="80" width="12" height="36" rx="6" fill="#ff8ba6"/>
-                <path d="M55 82c8-24 44-34 69-9" fill="none" stroke="#ff8ba6" stroke-width="8" stroke-linecap="round"/>
-                <rect x="62" y="90" width="56" height="15" rx="7" fill="#2ad1ff" opacity=".82" stroke="white"/>
-                <rect x="82" y="102" width="15" height="7" rx="3.5" fill="#2ad1ff" opacity=".82"/>
-                <path d="M77 124c8 6 17 6 26 0" fill="none" stroke="#8a4b2b" stroke-width="3" stroke-linecap="round"/>
-                <rect x="72" y="126" width="36" height="10" rx="5" fill="#f0c59a"/>
-                <circle cx="78" cy="175" r="6" fill="#d8f4ff"/>
-                <circle cx="102" cy="175" r="6" fill="#d8f4ff"/>
-                <text x="90" y="214" text-anchor="middle" font-size="12" fill="#dbeeff">Operario</text>
-              </svg>
-            </div>
-            <div>
-              <div style="font-weight:800;font-size:18px;margin-bottom:6px">Instructor de lanzamiento</div>
-              <div class="small" style="font-size:13px;line-height:1.55;color:var(--muted)">
-                El operario usa uniforme, gafas de seguridad y orejeras. Su misión es ayudarte a modelar trayectorias
-                clásicas, reconocer cuándo una relación deja de ser función y ajustar los parámetros correctos para
-                acertar al objetivo.
-              </div>
-            </div>
-          </div>
-        </section>
-      </aside>
-
-      <main class="right">
-        <section class="panel canvasWrap">
-          <canvas id="scene" width="1200" height="760"></canvas>
-          <div class="hud">
-            <div class="card"><div class="label">Fórmula</div><div class="big" id="formulaHud" style="font-size:16px;line-height:1.3">—</div></div>
-            <div class="card"><div class="label">Tipo</div><div class="big" id="typeHud" style="font-size:16px;line-height:1.35">—</div></div>
-            <div class="card"><div class="label">Paridad</div><div class="big" id="parityHud" style="font-size:16px;line-height:1.35">—</div></div>
-            <div class="card"><div class="label">Relación/función</div><div class="big" id="relationHud" style="font-size:16px;line-height:1.35">—</div></div>
-          </div>
-        </section>
-
-        <div class="miniGrid">
-          <section class="panel">
-            <div class="sectionTitle">
-              <h3>Diagnóstico matemático</h3>
-              <span class="tag">interpretación</span>
-            </div>
-            <div class="list" id="diagnosticsList"></div>
-          </section>
-
-          <section class="panel">
-            <div class="sectionTitle">
-              <h3>Representación tabular</h3>
-              <span class="tag">x y f(x)</span>
-            </div>
-            <div class="tableWrap">
-              <table>
-                <thead><tr><th>x</th><th>f(x)</th><th>Observación</th></tr></thead>
-                <tbody id="valueTable"></tbody>
-              </table>
-            </div>
-          </section>
-        </div>
-
-        <div class="miniGrid">
-          <section class="panel">
-            <div class="sectionTitle">
-              <h3>Intervalos de crecimiento y decrecimiento</h3>
-              <span class="tag">aproximación numérica</span>
-            </div>
-            <div class="list" id="intervalList"></div>
-          </section>
-
-          <section class="panel">
-            <div class="sectionTitle">
-              <h3>Prueba de paridad con blancos espejo</h3>
-              <span class="tag">f(x) vs f(-x)</span>
-            </div>
-            <div class="list" id="parityList"></div>
-          </section>
-        </div>
-
-        <section class="panel">
-          <div class="sectionTitle">
-            <h3>Fórmula simbólica y misión didáctica</h3>
-            <span class="tag">clásica</span>
-          </div>
-          <div class="formula" id="formulaPanel">—</div>
-          <div class="list" style="margin-top:12px">
-            <div class="listItem"><strong>1. Representación:</strong> la trayectoria aparece como fórmula, tabla y gráfica.</div>
-            <div class="listItem"><strong>2. Relación o función:</strong> usa la analogía balístico/teledirigido y la prueba de la recta vertical.</div>
-            <div class="listItem"><strong>3. Paridad:</strong> compara f(x) y f(-x) con los blancos espejo.</div>
-            <div class="listItem"><strong>4. Clasificación:</strong> identifica el tipo de función clásica elegido.</div>
-            <div class="listItem"><strong>5. Crecimiento:</strong> revisa los intervalos donde sube o baja.</div>
-            <div class="listItem"><strong>6. Manipulación de parámetros:</strong> usa controles deslizantes y teclado para acertar al objetivo.</div>
-          </div>
-        </section>
-      </main>
+      <input
+        className="w-full accent-fuchsia-600"
+        type="range"
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
     </div>
+  );
+}
 
-    <div class="footerNote">Archivo único listo para GitHub Pages · index.html</div>
-  </div>
+function MiniRelation({ kind, curvePoints }) {
+  const w = 270;
+  const h = 170;
+  const mx = (x) => ((x + 5) / 10) * w;
+  const my = (y) => h - ((y + 4) / 8) * h;
+  const verticalX = mx(1.7);
 
-<script>
-(() => {
-  const $ = id => document.getElementById(id);
-  const functionType = $('functionType');
-  const relationMode = $('relationMode');
-  const paramControls = $('paramControls');
-  const polyControls = $('polyControls');
-  const polyCoeffWrap = $('polyCoeffWrap');
-  const piecewiseControls = $('piecewiseControls');
-  const polyDegree = $('polyDegree');
-  const polyDegreeRange = $('polyDegreeRange');
-  const scene = $('scene');
-  const ctx = scene.getContext('2d');
-
-  const state = {
-    score: 0,
-    shots: 0,
-    hitRadius: 0.55,
-    view: {xMin:-10,xMax:10,yMin:-8,yMax:12},
-    animating: false,
-    projectileIndex: 0,
-    projectilePath: [],
-    projectilePos: null,
-    params: {
-      lineal:{m:1,b:0},
-      cuadratica:{c:-0.35,h:0,k:6},
-      exponencial:{a:1.6,k:0},
-      raiz:{c:2,h:-3,n:2,k:-1},
-      sinusoidal:{A:3,B:1,h:0,k:0},
-      absoluta:{a:1,h:0,k:0},
-      cubica:{c:0.08,h:0,k:0},
-      tramos:{s:0,m1:1.2,b1:0,m2:-0.6,b2:2},
-      polinomica:{n:3,coeffs:[0.08,0,-1.2,2]}
+  const trajectory = validSegments(curvePoints).slice(0, 2).map((seg) => buildPath(seg, mx, my));
+  const circlePath = (() => {
+    const pts = [];
+    for (let i = 0; i <= 220; i++) {
+      const t = (i / 220) * Math.PI * 2;
+      pts.push({ x: 2.4 * Math.cos(t), y: 2.4 * Math.sin(t) });
     }
-  };
+    return buildPath(pts, mx, my);
+  })();
+  const sideways = (() => {
+    const top = [];
+    const bottom = [];
+    for (let i = 0; i <= 120; i++) {
+      const y = -2.6 + (i / 120) * 5.2;
+      top.push({ x: 0.45 * y * y - 3.2, y });
+    }
+    return buildPath(top, mx, my);
+  })();
+  const discreteBad = [
+    { x: -3, y: -1.5 },
+    { x: -1, y: 2 },
+    { x: 2, y: 1.4 },
+    { x: 2, y: -2.5 },
+    { x: 4, y: 0.2 },
+  ];
+  const discreteGood = [
+    { x: -4, y: -2.2 },
+    { x: -2, y: 0.2 },
+    { x: 0, y: 2.4 },
+    { x: 2, y: 1.1 },
+    { x: 4, y: -1.3 },
+  ];
 
-  const meta = {
-    lineal: {label:'Función lineal', desc:'Recta de pendiente constante.', formula:p => `y = ${fmt(p.m)}x ${signed(p.b)}`},
-    cuadratica: {label:'Función cuadrática', desc:'Parábola con vértice en (h, k).', formula:p => `y = ${fmt(p.c)}(x ${signed(-p.h)})² ${signed(p.k)}`},
-    polinomica: {label:'Función polinómica', desc:'Suma de términos de distintos grados.', formula:p => polyFormula(p)},
-    exponencial: {label:'Función exponencial', desc:'Crecimiento o decrecimiento exponencial.', formula:p => `y = ${fmt(p.a)}^x ${signed(p.k)}`},
-    raiz: {label:'Función radical', desc:'Raíz n-ésima desplazada y escalada.', formula:p => `y = ${fmt(p.c)}(x ${signed(-p.h)})^(1/${Math.round(p.n)}) ${signed(p.k)}`},
-    sinusoidal: {label:'Función sinusoidal', desc:'Comportamiento periódico.', formula:p => `y = ${fmt(p.A)}·sen(${fmt(p.B)}(x ${signed(-p.h)})) ${signed(p.k)}`},
-    absoluta: {label:'Función valor absoluto', desc:'Gráfica en forma de V.', formula:p => `y = ${fmt(p.a)}|x ${signed(-p.h)}| ${signed(p.k)}`},
-    cubica: {label:'Función cúbica', desc:'Curva tipo S, suele ser impar en casos particulares.', formula:p => `y = ${fmt(p.c)}(x ${signed(-p.h)})³ ${signed(p.k)}`},
-    tramos: {label:'Función a tramos', desc:'Dos expresiones lineales separadas por un corte s.', formula:p => `y = { ${fmt(p.m1)}x ${signed(p.b1)} si x < ${fmt(p.s)} ; ${fmt(p.m2)}x ${signed(p.b2)} si x ≥ ${fmt(p.s)} }`}
-  };
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="h-44 w-full rounded-2xl bg-slate-950 shadow-inner">
+      {[...Array(11)].map((_, i) => (
+        <line key={`gx-${i}`} x1={(i / 10) * w} x2={(i / 10) * w} y1="0" y2={h} stroke="rgba(255,255,255,.08)" />
+      ))}
+      {[...Array(9)].map((_, i) => (
+        <line key={`gy-${i}`} y1={(i / 8) * h} y2={(i / 8) * h} x1="0" x2={w} stroke="rgba(255,255,255,.08)" />
+      ))}
+      <line x1={mx(0)} x2={mx(0)} y1="0" y2={h} stroke="rgba(255,255,255,.35)" />
+      <line x1="0" x2={w} y1={my(0)} y2={my(0)} stroke="rgba(255,255,255,.35)" />
+      <line x1={verticalX} x2={verticalX} y1="10" y2={h - 10} stroke="#fbbf24" strokeWidth="3" strokeDasharray="7 6" />
 
-  const relationInfo = {
-    actual: {isFunction:true, text:'Misil balístico: para cada posición horizontal x hay una sola altura y. Sí es función.'},
-    guidedLoop: {isFunction:false, text:'Misil teledirigido en bucle: vuelve sobre la misma x con distintas alturas. No es función.'},
-    horizontalParabola: {isFunction:false, text:'Trayectoria lateral tipo x = y²: una vertical corta dos puntos. No es función.'},
-    pointValid: {isFunction:true, text:'Comandos discretos válidos: cada x tiene una sola salida. Sí es función.'},
-    pointInvalid: {isFunction:false, text:'Comandos discretos inválidos: se repite una misma x con dos salidas distintas. No es función.'}
-  };
+      {kind === "trajectory" && trajectory.map((d, i) => <path key={i} d={d} fill="none" stroke="#38bdf8" strokeWidth="4" />)}
+      {kind === "circle" && <path d={circlePath} fill="rgba(56,189,248,.16)" stroke="#38bdf8" strokeWidth="4" />}
+      {kind === "sideways" && <path d={sideways} fill="none" stroke="#38bdf8" strokeWidth="4" />}
+      {kind === "discreteBad" &&
+        discreteBad.map((p, i) => <circle key={i} cx={mx(p.x)} cy={my(p.y)} r="6" fill="#38bdf8" stroke="white" strokeWidth="2" />)}
+      {kind === "discreteGood" &&
+        discreteGood.map((p, i) => <circle key={i} cx={mx(p.x)} cy={my(p.y)} r="6" fill="#38bdf8" stroke="white" strokeWidth="2" />)}
+      <text x="12" y="24" fill="#fbbf24" fontSize="12" fontWeight="700">Prueba de la recta vertical</text>
+    </svg>
+  );
+}
 
-  const defaultControlSets = {
-    lineal:[{k:'m',label:'Pendiente m',min:-5,max:5,step:0.1},{k:'b',label:'Intersección b',min:-8,max:8,step:0.1}],
-    cuadratica:[{k:'c',label:'Apertura c',min:-4,max:4,step:0.05},{k:'h',label:'Traslado h',min:-8,max:8,step:0.1},{k:'k',label:'Traslado k',min:-8,max:12,step:0.1}],
-    exponencial:[{k:'a',label:'Base a',min:0.2,max:5,step:0.05},{k:'k',label:'Traslado k',min:-8,max:12,step:0.1}],
-    raiz:[{k:'c',label:'Escala c',min:-5,max:5,step:0.1},{k:'h',label:'Traslado h',min:-8,max:8,step:0.1},{k:'n',label:'Índice n',min:2,max:7,step:1},{k:'k',label:'Traslado k',min:-8,max:12,step:0.1}],
-    sinusoidal:[{k:'A',label:'Amplitud A',min:-6,max:6,step:0.1},{k:'B',label:'Frecuencia B',min:0.1,max:4,step:0.05},{k:'h',label:'Fase h',min:-8,max:8,step:0.1},{k:'k',label:'Línea media k',min:-8,max:8,step:0.1}],
-    absoluta:[{k:'a',label:'Escala a',min:-5,max:5,step:0.1},{k:'h',label:'Traslado h',min:-8,max:8,step:0.1},{k:'k',label:'Traslado k',min:-8,max:12,step:0.1}],
-    cubica:[{k:'c',label:'Escala c',min:-1,max:1,step:0.01},{k:'h',label:'Traslado h',min:-8,max:8,step:0.1},{k:'k',label:'Traslado k',min:-8,max:12,step:0.1}],
-    tramos:[]
-  };
+export default function SimuladorInterseccionProyectiles() {
+  const [family, setFamily] = useState("cuadratica");
+  const [params, setParams] = useState(families.cuadratica.defaultParams);
+  const [target, setTarget] = useState({ x: 4, y: 4.5 });
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [score, setScore] = useState(0);
+  const [shots, setShots] = useState(0);
+  const [relation, setRelation] = useState("trajectory");
+  const [showTableAroundTarget, setShowTableAroundTarget] = useState(true);
+  const requestRef = useRef(null);
+  const startRef = useRef(null);
 
-  function fmt(n,d=2){
-    if(!Number.isFinite(n)) return '—';
-    const s = Number(n).toFixed(d);
-    return s.replace(/\.00$/,'').replace(/(\.\d)0$/,'$1');
-  }
-  function signed(n){
-    return n>=0 ? `+ ${fmt(n)}` : `- ${fmt(Math.abs(n))}`;
-  }
-  function clamp(v,min,max){return Math.max(min,Math.min(max,v));}
-  function approxEq(a,b,tol=1e-6){return Math.abs(a-b)<=tol;}
+  const def = families[family];
+  const points = useMemo(() => sampleCurve(family, params, 740), [family, params]);
+  const segments = useMemo(() => validSegments(points), [points]);
+  const pathPoints = useMemo(() => points.filter(Boolean).filter((p) => p.y > VIEW.yMin - 20 && p.y < VIEW.yMax + 20), [points]);
+  const parity = useMemo(() => detectParity(family, params), [family, params]);
+  const intervals = useMemo(() => growthIntervals(family, params), [family, params]);
+  const minDist = useMemo(() => minDistanceToTarget(points, target), [points, target]);
+  const isHit = minDist <= 0.45;
 
-  function pairControl(key, label, value, min, max, step, onChange){
-    const wrap = document.createElement('div'); wrap.className = 'control';
-    const lab = document.createElement('label'); lab.className = 'lbl'; lab.textContent = label; wrap.appendChild(lab);
-    const pair = document.createElement('div'); pair.className = 'pair';
-    const range = document.createElement('input'); range.type='range'; range.min=min; range.max=max; range.step=step; range.value=value;
-    const num = document.createElement('input'); num.type='number'; num.min=min; num.max=max; num.step=step; num.value=value;
-    const sync = (from, to) => {
-      const v = Number(from.value);
-      to.value = v;
-      onChange(v);
-      updateAll();
+  const mapX = (x) => ((x - VIEW.xMin) / (VIEW.xMax - VIEW.xMin)) * VIEW.w;
+  const mapY = (y) => VIEW.h - ((y - VIEW.yMin) / (VIEW.yMax - VIEW.yMin)) * VIEW.h;
+  const projectile = pathPoints.length ? pathPoints[Math.min(pathPoints.length - 1, Math.floor(progress * (pathPoints.length - 1)))] : null;
+  const currentDistance = projectile ? Math.hypot(projectile.x - target.x, projectile.y - target.y) : Infinity;
+
+  const tableXs = useMemo(() => {
+    if (showTableAroundTarget) {
+      const base = Math.round(target.x);
+      return [base - 3, base - 2, base - 1, base, base + 1, base + 2, base + 3].filter((x) => x >= VIEW.xMin && x <= VIEW.xMax);
+    }
+    return [-6, -4, -2, 0, 2, 4, 6];
+  }, [target.x, showTableAroundTarget]);
+
+  const tableRows = tableXs.map((x) => ({ x, y: def.eval(x, params) }));
+
+  useEffect(() => {
+    return () => {
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-    range.addEventListener('input',()=>sync(range,num));
-    num.addEventListener('input',()=>sync(num,range));
-    pair.appendChild(range); pair.appendChild(num); wrap.appendChild(pair);
-    return wrap;
-  }
+  }, []);
 
-  function renderParamControls(){
-    const t = functionType.value;
-    paramControls.innerHTML = '';
-    polyControls.classList.add('hidden');
-    piecewiseControls.classList.add('hidden');
+  useEffect(() => {
+    setRunning(false);
+    setProgress(0);
+  }, [family]);
 
-    if(t === 'polinomica'){
-      polyControls.classList.remove('hidden');
-      renderPolynomialControls();
-      return;
-    }
-    if(t === 'tramos'){
-      piecewiseControls.classList.remove('hidden');
-      renderPiecewiseControls();
-      return;
-    }
-
-    defaultControlSets[t].forEach(c => {
-      const el = pairControl(c.k, c.label, state.params[t][c.k], c.min, c.max, c.step, v => {
-        state.params[t][c.k] = c.k === 'n' ? Math.round(v) : v;
-      });
-      paramControls.appendChild(el);
-    });
-  }
-
-  function renderPolynomialControls(){
-    const p = state.params.polinomica;
-    polyDegree.value = p.n;
-    polyDegreeRange.value = p.n;
-    polyCoeffWrap.innerHTML = '';
-    for(let power = p.n; power >= 0; power--){
-      const idx = p.n - power;
-      if(typeof p.coeffs[idx] === 'undefined') p.coeffs[idx] = 0;
-      const wrap = document.createElement('div'); wrap.className = 'control';
-      const lab = document.createElement('label'); lab.className='lbl'; lab.textContent = `Coeficiente de x^${power}`;
-      const input = document.createElement('input'); input.type='number'; input.step='0.1'; input.value = p.coeffs[idx];
-      input.addEventListener('input',()=>{ p.coeffs[idx] = Number(input.value || 0); updateAll(); });
-      wrap.appendChild(lab); wrap.appendChild(input); polyCoeffWrap.appendChild(wrap);
-    }
-  }
-
-  function renderPiecewiseControls(){
-    const p = state.params.tramos;
-    piecewiseControls.innerHTML = '';
-    [
-      ['s','Punto de corte s',-8,8,0.1],
-      ['m1','Pendiente rama 1',-5,5,0.1],
-      ['b1','Intersección rama 1',-8,8,0.1],
-      ['m2','Pendiente rama 2',-5,5,0.1],
-      ['b2','Intersección rama 2',-8,8,0.1]
-    ].forEach(([k,label,min,max,step]) => {
-      piecewiseControls.appendChild(pairControl(k,label,p[k],min,max,step,v=>{p[k]=v;}));
-    });
-  }
-
-  polyDegree.addEventListener('input', () => syncPolyDegree(Number(polyDegree.value)));
-  polyDegreeRange.addEventListener('input', () => syncPolyDegree(Number(polyDegreeRange.value)));
-  function syncPolyDegree(v){
-    const n = Math.round(clamp(v,0,6));
-    polyDegree.value = n; polyDegreeRange.value = n;
-    const p = state.params.polinomica;
-    p.n = n;
-    const needed = n + 1;
-    while(p.coeffs.length < needed) p.coeffs.unshift(0);
-    while(p.coeffs.length > needed) p.coeffs.shift();
-    renderPolynomialControls();
-    updateAll();
-  }
-
-  function polyFormula(p){
-    const parts = [];
-    for(let i=0;i<p.coeffs.length;i++){
-      const coef = p.coeffs[i];
-      const power = p.n - i;
-      if(Math.abs(coef) < 1e-10) continue;
-      let term = '';
-      const absC = Math.abs(coef);
-      if(power === 0) term = `${fmt(absC)}`;
-      else if(power === 1) term = `${approxEq(absC,1)?'':fmt(absC)}x`;
-      else term = `${approxEq(absC,1)?'':fmt(absC)}x^${power}`;
-      parts.push((coef<0?'- ':'+ ') + term);
-    }
-    if(!parts.length) return 'y = 0';
-    const first = parts[0].replace(/^\+ /,'');
-    return 'y = ' + [first,...parts.slice(1)].join(' ');
-  }
-
-  function getActiveParams(){
-    return JSON.parse(JSON.stringify(state.params[functionType.value]));
-  }
-
-  function evaluateFunction(x, type = functionType.value){
-    const p = state.params[type];
-    switch(type){
-      case 'lineal': return p.m*x + p.b;
-      case 'cuadratica': return p.c*Math.pow(x-p.h,2) + p.k;
-      case 'polinomica': {
-        let y = 0;
-        for(let i=0;i<p.coeffs.length;i++) y += p.coeffs[i]*Math.pow(x,p.n-i);
-        return y;
+  useEffect(() => {
+    if (!running) return;
+    const duration = 3600;
+    const animate = (time) => {
+      if (!startRef.current) startRef.current = time;
+      const t = clamp((time - startRef.current) / duration, 0, 1);
+      setProgress(t);
+      if (t < 1) {
+        requestRef.current = requestAnimationFrame(animate);
+      } else {
+        setRunning(false);
+        startRef.current = null;
+        setShots((s) => s + 1);
+        if (isHit) setScore((s) => s + 100);
       }
-      case 'exponencial': {
-        if(p.a <= 0 || approxEq(p.a,1)) return Math.pow(Math.max(p.a,0.0001), x) + p.k;
-        return Math.pow(p.a,x) + p.k;
-      }
-      case 'raiz': {
-        const n = Math.max(2, Math.round(p.n));
-        const u = x - p.h;
-        let root;
-        if(n % 2 === 0){
-          if(u < 0) return NaN;
-          root = Math.pow(u,1/n);
-        } else {
-          root = Math.sign(u)*Math.pow(Math.abs(u),1/n);
-        }
-        return p.c*root + p.k;
-      }
-      case 'sinusoidal': return p.A*Math.sin(p.B*(x-p.h)) + p.k;
-      case 'absoluta': return p.a*Math.abs(x-p.h) + p.k;
-      case 'cubica': return p.c*Math.pow(x-p.h,3) + p.k;
-      case 'tramos': return x < p.s ? p.m1*x + p.b1 : p.m2*x + p.b2;
-      default: return NaN;
-    }
-  }
-
-  function sampleCurve(type = functionType.value, density = 900){
-    const out = [];
-    for(let i=0;i<=density;i++){
-      const x = state.view.xMin + (i/density)*(state.view.xMax-state.view.xMin);
-      const y = evaluateFunction(x, type);
-      out.push(Number.isFinite(y) ? {x,y} : null);
-    }
-    return out;
-  }
-
-  function getSegments(points){
-    const segs=[]; let cur=[];
-    for(const p of points){
-      if(p && Number.isFinite(p.y) && p.y > state.view.yMin-30 && p.y < state.view.yMax+30){ cur.push(p); }
-      else if(cur.length){ segs.push(cur); cur=[]; }
-    }
-    if(cur.length) segs.push(cur);
-    return segs;
-  }
-
-  function detectParity(){
-    const xs = [];
-    for(let i=0;i<=160;i++){
-      const x = -8 + i*(16/160);
-      if(Math.abs(x) > 1e-8) xs.push(x);
-    }
-    let count=0, evenMax=0, oddMax=0;
-    for(const x of xs){
-      const y1 = evaluateFunction(x), y2 = evaluateFunction(-x);
-      if(!Number.isFinite(y1) || !Number.isFinite(y2)) continue;
-      count++;
-      const scale = 1 + Math.abs(y1) + Math.abs(y2);
-      evenMax = Math.max(evenMax, Math.abs(y2-y1)/scale);
-      oddMax = Math.max(oddMax, Math.abs(y2+y1)/scale);
-    }
-    if(count < 25) return {label:'Ninguna', reason:'El dominio no es suficientemente simétrico para certificar paridad.'};
-    if(evenMax < 0.012) return {label:'Par', reason:'Aproximadamente cumple f(-x)=f(x). Simetría respecto al eje y.'};
-    if(oddMax < 0.012) return {label:'Impar', reason:'Aproximadamente cumple f(-x)=-f(x). Simetría respecto al origen.'};
-    return {label:'Ninguna', reason:'No cumple simetría par ni impar en el intervalo analizado.'};
-  }
-
-  function growthIntervals(){
-    const pts = sampleCurve(functionType.value, 420).filter(Boolean);
-    if(pts.length < 4) return ['No hay suficientes puntos válidos.'];
-    let start = pts[0].x;
-    let lastSign = 0;
-    const pieces=[];
-    const eps=0.02;
-    for(let i=1;i<pts.length;i++){
-      const dy = pts[i].y - pts[i-1].y;
-      const dx = pts[i].x - pts[i-1].x;
-      const slope = dy/dx;
-      const s = slope > eps ? 1 : (slope < -eps ? -1 : 0);
-      if(lastSign === 0 && s !== 0) lastSign = s;
-      if(s !== 0 && lastSign !== 0 && s !== lastSign){
-        pieces.push({from:start,to:pts[i-1].x,sign:lastSign});
-        start = pts[i-1].x;
-        lastSign = s;
-      }
-    }
-    pieces.push({from:start,to:pts[pts.length-1].x,sign:lastSign});
-    const formatted = pieces
-      .filter(p=>Math.abs(p.to-p.from) > .4)
-      .slice(0,8)
-      .map(p => `${p.sign>0?'Creciente':p.sign<0?'Decreciente':'Aprox. constante'} en (${fmt(p.from)}, ${fmt(p.to)})`);
-    return formatted.length ? formatted : ['No se detectaron cambios significativos.'];
-  }
-
-  function parityProbe(){
-    const x = Number($('probeX').value || 0);
-    const fx = evaluateFunction(x);
-    const fneg = evaluateFunction(-x);
-    const mode = $('parityMode').value;
-    const expected = mode === 'even' ? fx : -fx;
-    const ok = Number.isFinite(fx) && Number.isFinite(fneg) && Math.abs(fneg - expected) < 0.08;
-    const primary = {x:x,y:fx};
-    const mirror = {x:-x,y:mode==='even'?fx:-fx, actualY:fneg, ok};
-    return {primary, mirror, mode, ok};
-  }
-
-  function verticalTest(){
-    const key = relationMode.value;
-    return relationInfo[key];
-  }
-
-  function distanceToTarget(points, target){
-    let best = Infinity;
-    for(const p of points){
-      if(!p) continue;
-      const d = Math.hypot(p.x-target.x,p.y-target.y);
-      if(d < best) best = d;
-    }
-    return best;
-  }
-
-  function toCanvasX(x){
-    const {xMin,xMax} = state.view;
-    return 60 + ((x-xMin)/(xMax-xMin))*(scene.width-120);
-  }
-  function toCanvasY(y){
-    const {yMin,yMax} = state.view;
-    return scene.height-70 - ((y-yMin)/(yMax-yMin))*(scene.height-120);
-  }
-
-  function drawRoundedRect(x,y,w,h,r,fill,stroke){
-    ctx.beginPath();
-    ctx.moveTo(x+r,y);
-    ctx.arcTo(x+w,y,x+w,y+h,r);
-    ctx.arcTo(x+w,y+h,x,y+h,r);
-    ctx.arcTo(x,y+h,x,y,r);
-    ctx.arcTo(x,y,x+w,y,r);
-    if(fill){ ctx.fillStyle = fill; ctx.fill(); }
-    if(stroke){ ctx.strokeStyle = stroke; ctx.stroke(); }
-  }
-
-  function drawScene(){
-    const w = scene.width, h = scene.height;
-    ctx.clearRect(0,0,w,h);
-
-    const grad = ctx.createLinearGradient(0,0,0,h);
-    grad.addColorStop(0,'#07111d'); grad.addColorStop(.55,'#0a1729'); grad.addColorStop(1,'#07111d');
-    ctx.fillStyle = grad; ctx.fillRect(0,0,w,h);
-
-    // vignette
-    const rg = ctx.createRadialGradient(w*0.6,h*0.35,50,w*0.6,h*0.35,650);
-    rg.addColorStop(0,'rgba(46,230,255,.10)'); rg.addColorStop(1,'rgba(0,0,0,0)');
-    ctx.fillStyle = rg; ctx.fillRect(0,0,w,h);
-
-    // Grid
-    ctx.lineWidth = 1;
-    for(let gx=Math.ceil(state.view.xMin); gx<=Math.floor(state.view.xMax); gx++){
-      const px = toCanvasX(gx);
-      ctx.strokeStyle = gx===0 ? 'rgba(255,255,255,.45)' : 'rgba(255,255,255,.08)';
-      ctx.beginPath(); ctx.moveTo(px,30); ctx.lineTo(px,h-70); ctx.stroke();
-      if(gx!==0){ ctx.fillStyle='rgba(255,255,255,.42)'; ctx.font='12px Inter, Arial'; ctx.fillText(gx, px+3, toCanvasY(0)+16); }
-    }
-    for(let gy=Math.ceil(state.view.yMin); gy<=Math.floor(state.view.yMax); gy++){
-      const py = toCanvasY(gy);
-      ctx.strokeStyle = gy===0 ? 'rgba(255,255,255,.45)' : 'rgba(255,255,255,.08)';
-      ctx.beginPath(); ctx.moveTo(60,py); ctx.lineTo(w-60,py); ctx.stroke();
-      if(gy!==0){ ctx.fillStyle='rgba(255,255,255,.42)'; ctx.font='12px Inter, Arial'; ctx.fillText(gy, toCanvasX(0)+7, py-4); }
-    }
-
-    // relation overlay test (top-right mini box)
-    drawRoundedRect(w-330,30,260,150,18,'rgba(255,255,255,.06)','rgba(255,255,255,.12)');
-    ctx.fillStyle='#eaf7ff'; ctx.font='700 14px Inter'; ctx.fillText('Relación y función',w-310,55);
-    ctx.fillStyle='rgba(255,255,255,.68)'; ctx.font='12px Inter'; wrapText(relationInfo[relationMode.value].text,w-310,75,220,16);
-    drawRelationPreview(w-310,108,220,58);
-
-    // Formula pill
-    drawRoundedRect(72,38,420,42,16,'rgba(255,255,255,.06)','rgba(255,255,255,.12)');
-    ctx.fillStyle='#dff4ff'; ctx.font='700 14px Inter'; ctx.fillText(meta[functionType.value].formula(getActiveParams()), 88, 64);
-
-    // sample trajectory
-    const points = sampleCurve();
-    const segs = getSegments(points);
-    ctx.save();
-    ctx.shadowBlur = 14; ctx.shadowColor = 'rgba(46,230,255,.45)';
-    ctx.lineWidth = 4;
-    const curveGrad = ctx.createLinearGradient(60,0,w-60,0); curveGrad.addColorStop(0,'#2ee6ff'); curveGrad.addColorStop(.55,'#9e83ff'); curveGrad.addColorStop(1,'#ff7cf5');
-    ctx.strokeStyle = curveGrad;
-    for(const seg of segs){
-      ctx.beginPath();
-      seg.forEach((p,i)=>{ const X=toCanvasX(p.x), Y=toCanvasY(p.y); if(i===0) ctx.moveTo(X,Y); else ctx.lineTo(X,Y); });
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    // Main target
-    const target = {x:Number($('targetX').value||0), y:Number($('targetY').value||0)};
-    drawTarget(target.x,target.y,'#ffd86f','Blanco principal');
-
-    // parity targets (mirror)
-    const probe = parityProbe();
-    if(Number.isFinite(probe.primary.y)) drawTarget(probe.primary.x, probe.primary.y,'#6ef8b8','f(x)', true);
-    if(Number.isFinite(probe.mirror.actualY)) drawTarget(probe.mirror.x, probe.mirror.actualY,'#ff7cf5', probe.mode==='even' ? 'f(-x)' : 'f(-x)', true);
-
-    // projection hints for parity
-    if(Number.isFinite(probe.primary.y) && Number.isFinite(probe.mirror.actualY)){
-      ctx.save();
-      ctx.strokeStyle='rgba(255,124,245,.28)'; ctx.setLineDash([6,6]);
-      ctx.beginPath(); ctx.moveTo(toCanvasX(probe.primary.x),toCanvasY(probe.primary.y)); ctx.lineTo(toCanvasX(probe.mirror.x),toCanvasY(probe.mirror.actualY)); ctx.stroke();
-      ctx.restore();
-    }
-
-    // projectile
-    if(state.projectilePos){
-      const X = toCanvasX(state.projectilePos.x), Y = toCanvasY(state.projectilePos.y);
-      ctx.save();
-      ctx.shadowBlur=25; ctx.shadowColor='rgba(110,248,184,.8)';
-      ctx.fillStyle='#6ef8b8'; ctx.beginPath(); ctx.arc(X,Y,9,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle='rgba(110,248,184,.18)'; ctx.beginPath(); ctx.arc(X,Y,22,0,Math.PI*2); ctx.fill();
-      ctx.restore();
-    }
-
-    // launcher and avatar silhouette on scene bottom-left
-    drawLauncher();
-
-    // axes labels
-    ctx.fillStyle='rgba(255,255,255,.55)'; ctx.font='13px Inter';
-    ctx.fillText('x', w-55, toCanvasY(0)-8); ctx.fillText('y', toCanvasX(0)+8, 44);
-  }
-
-  function drawLauncher(){
-    const baseX = 112, baseY = scene.height-90;
-    ctx.save();
-    // platform
-    drawRoundedRect(baseX-48,baseY+12,120,24,8,'rgba(255,255,255,.08)','rgba(255,255,255,.15)');
-    // cannon
-    ctx.translate(baseX,baseY);
-    ctx.rotate(-0.45);
-    drawRoundedRect(-6,-16,72,20,10,'#0f6bb0','rgba(255,255,255,.25)');
-    drawRoundedRect(54,-12,18,12,4,'#89f4ff','rgba(255,255,255,.35)');
-    ctx.restore();
-    // operator silhouette
-    ctx.save();
-    ctx.translate(65,scene.height-118);
-    ctx.fillStyle='rgba(255,255,255,.12)';
-    ctx.beginPath(); ctx.arc(0,0,16,0,Math.PI*2); ctx.fill();
-    drawRoundedRect(-16,18,32,52,10,'rgba(22,178,255,.25)','rgba(255,255,255,.2)');
-    ctx.fillStyle='rgba(255,124,245,.45)'; ctx.fillRect(-23,-3,6,20); ctx.fillRect(17,-3,6,20);
-    ctx.fillStyle='rgba(46,230,255,.55)'; drawRoundedRect(-14,-2,28,10,5,'rgba(46,230,255,.5)','rgba(255,255,255,.3)');
-    ctx.restore();
-  }
-
-  function drawTarget(x,y,color,label,small=false){
-    if(!Number.isFinite(x) || !Number.isFinite(y)) return;
-    const X = toCanvasX(x), Y = toCanvasY(y);
-    ctx.save();
-    ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=2;
-    ctx.globalAlpha=.95;
-    const r1 = small ? 10 : 16;
-    const r2 = small ? 18 : 26;
-    ctx.beginPath(); ctx.arc(X,Y,r2,0,Math.PI*2); ctx.stroke();
-    ctx.beginPath(); ctx.arc(X,Y,r1,0,Math.PI*2); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(X-r2-6,Y); ctx.lineTo(X+r2+6,Y); ctx.moveTo(X,Y-r2-6); ctx.lineTo(X,Y+r2+6); ctx.stroke();
-    ctx.beginPath(); ctx.arc(X,Y,4,0,Math.PI*2); ctx.fill();
-    ctx.font='12px Inter'; ctx.fillText(label, X+12, Y-12);
-    ctx.restore();
-  }
-
-  function drawRelationPreview(x,y,w,h){
-    const local = (u,v)=>[x + ((u+5)/10)*w, y + h - ((v+4)/8)*h];
-    // grid lines
-    ctx.save();
-    ctx.strokeStyle='rgba(255,255,255,.08)';
-    for(let i=0;i<=10;i++){ const px=x+i*w/10; ctx.beginPath(); ctx.moveTo(px,y); ctx.lineTo(px,y+h); ctx.stroke(); }
-    for(let i=0;i<=8;i++){ const py=y+i*h/8; ctx.beginPath(); ctx.moveTo(x,py); ctx.lineTo(x+w,py); ctx.stroke(); }
-    ctx.strokeStyle='rgba(255,255,255,.3)';
-    const [ax0,ay0]=local(0,-4); const [ax1,ay1]=local(0,4); ctx.beginPath(); ctx.moveTo(ax0,ay0); ctx.lineTo(ax1,ay1); ctx.stroke();
-    const [bx0,by0]=local(-5,0); const [bx1,by1]=local(5,0); ctx.beginPath(); ctx.moveTo(bx0,by0); ctx.lineTo(bx1,by1); ctx.stroke();
-    ctx.strokeStyle='#ffd86f'; ctx.setLineDash([5,5]); const [vx0,vy0]=local(1.6,-4); const [vx1,vy1]=local(1.6,4); ctx.beginPath(); ctx.moveTo(vx0,vy0); ctx.lineTo(vx1,vy1); ctx.stroke(); ctx.setLineDash([]);
-    ctx.lineWidth=3; ctx.strokeStyle='#2ee6ff'; ctx.fillStyle='#2ee6ff';
-    const mode = relationMode.value;
-    if(mode==='actual'){
-      let started=false; ctx.beginPath();
-      for(let i=0;i<=180;i++){
-        const u = -5 + i*(10/180); const v = 0.5*u + 1;
-        const [px,py]=local(u,v); if(!started){ctx.moveTo(px,py); started=true;} else ctx.lineTo(px,py);
-      }
-      ctx.stroke();
-    } else if(mode==='guidedLoop'){
-      let started=false; ctx.beginPath();
-      for(let i=0;i<=200;i++){
-        const t=i/200*Math.PI*2; const u=2.1*Math.cos(t), v=2.1*Math.sin(t); const [px,py]=local(u,v); if(!started){ctx.moveTo(px,py); started=true;} else ctx.lineTo(px,py);
-      } ctx.stroke();
-    } else if(mode==='horizontalParabola'){
-      let started=false; ctx.beginPath();
-      for(let i=0;i<=160;i++){
-        const v=-3.5 + i*(7/160); const u=0.35*v*v - 3; const [px,py]=local(u,v); if(!started){ctx.moveTo(px,py); started=true;} else ctx.lineTo(px,py);
-      } ctx.stroke();
-    } else if(mode==='pointValid' || mode==='pointInvalid'){
-      const pts = mode==='pointValid' ? [[-4,-2],[-2,1],[0,2.5],[2,1],[4,-1]] : [[-4,-2],[-2,1],[2,2.4],[2,-2],[4,-1]];
-      for(const p of pts){ const [px,py]=local(p[0],p[1]); ctx.beginPath(); ctx.arc(px,py,4,0,Math.PI*2); ctx.fill(); }
-    }
-    ctx.restore();
-  }
-
-  function wrapText(text,x,y,maxWidth,lineHeight){
-    const words = text.split(' '); let line='';
-    for(let n=0;n<words.length;n++){
-      const testLine = line + words[n] + ' '; const metrics = ctx.measureText(testLine);
-      if(metrics.width > maxWidth && n>0){ ctx.fillText(line,x,y); line=words[n]+' '; y+=lineHeight; }
-      else line=testLine;
-    }
-    ctx.fillText(line,x,y);
-  }
-
-  function fireProjectile(){
-    if(state.animating) return;
-    const points = sampleCurve().filter(Boolean).filter(p=>p.y > state.view.yMin-20 && p.y < state.view.yMax+20);
-    if(!points.length) return;
-    state.projectilePath = points;
-    state.projectileIndex = 0;
-    state.projectilePos = points[0];
-    state.animating = true;
-    state.shots++;
-    let lastTime = 0;
-    const speed = 90; // samples per second
-    function step(ts){
-      if(!state.animating) return;
-      if(!lastTime) lastTime = ts;
-      const dt = (ts-lastTime)/1000; lastTime = ts;
-      state.projectileIndex += speed*dt;
-      const idx = Math.min(points.length-1, Math.floor(state.projectileIndex));
-      state.projectilePos = points[idx];
-      updateAll(false);
-      if(idx < points.length-1){ requestAnimationFrame(step); }
-      else {
-        state.animating = false;
-        const target = {x:Number($('targetX').value||0), y:Number($('targetY').value||0)};
-        const d = distanceToTarget(points,target);
-        if(d <= state.hitRadius) state.score += 100;
-        updateAll();
-      }
-    }
-    requestAnimationFrame(step);
-  }
-
-  function randomTarget(){
-    $('targetX').value = (Math.random()*14 - 7).toFixed(1);
-    $('targetY').value = (Math.random()*12 - 5).toFixed(1);
-    $('probeX').value = (Math.random()*6 + 1).toFixed(1);
-    updateAll();
-  }
-
-  function resetScore(){ state.score = 0; state.shots = 0; updateAll(); }
-  function resetParams(){
-    state.params = {
-      lineal:{m:1,b:0}, cuadratica:{c:-0.35,h:0,k:6}, exponencial:{a:1.6,k:0}, raiz:{c:2,h:-3,n:2,k:-1},
-      sinusoidal:{A:3,B:1,h:0,k:0}, absoluta:{a:1,h:0,k:0}, cubica:{c:0.08,h:0,k:0},
-      tramos:{s:0,m1:1.2,b1:0,m2:-0.6,b2:2}, polinomica:{n:3,coeffs:[0.08,0,-1.2,2]}
     };
-    renderParamControls(); updateAll();
-  }
+    requestRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(requestRef.current);
+  }, [running, isHit]);
 
-  function updateDiagnostics(){
-    const points = sampleCurve();
-    const target = {x:Number($('targetX').value||0), y:Number($('targetY').value||0)};
-    const d = distanceToTarget(points,target);
-    const hit = d <= state.hitRadius;
-    const parity = detectParity();
-    const probe = parityProbe();
-    const rel = verticalTest();
-    const fxTarget = evaluateFunction(target.x);
-    const diffTarget = Number.isFinite(fxTarget) ? target.y - fxTarget : NaN;
+  const changeFamily = (next) => {
+    setFamily(next);
+    setParams(families[next].defaultParams);
+  };
 
-    $('scoreValue').textContent = state.score;
-    $('shotsValue').textContent = state.shots;
-    $('distanceValue').textContent = Number.isFinite(d) ? fmt(d,3) : '—';
-    $('statusValue').textContent = hit ? 'Impacto posible' : Number.isFinite(diffTarget) ? (diffTarget>0 ? 'La curva está por debajo' : 'La curva está por encima') : 'Blanco fuera del dominio';
-    $('statusValue').className = hit ? 'statusGood' : Number.isFinite(diffTarget) ? 'statusWarn' : 'statusBad';
+  const updateParam = (key, value) => setParams((p) => ({ ...p, [key]: value }));
 
-    const formula = meta[functionType.value].formula(getActiveParams());
-    $('formulaHud').textContent = formula;
-    $('formulaPanel').textContent = formula;
-    $('typeHud').innerHTML = `<strong>${meta[functionType.value].label}</strong><br><span class="small">${meta[functionType.value].desc}</span>`;
-    $('parityHud').innerHTML = `<strong>${parity.label}</strong><br><span class="small">${parity.reason}</span>`;
-    $('relationHud').innerHTML = `<span class="${rel.isFunction?'statusGood':'statusBad'}"><strong>${rel.isFunction?'Sí es función':'No es función'}</strong></span><br><span class="small">${rel.text}</span>`;
-    $('relationBlurb').textContent = rel.text;
+  const fire = () => {
+    startRef.current = null;
+    setProgress(0);
+    setRunning(true);
+  };
 
-    const diagnostics = [
-      `<strong>Clasificación:</strong> ${meta[functionType.value].label}. ${meta[functionType.value].desc}`,
-      `<strong>Paridad:</strong> ${parity.label}. ${parity.reason}`,
-      `<strong>Relación/función:</strong> ${rel.isFunction ? 'Sí es función' : 'No es función'}. ${rel.text}`,
-      Number.isFinite(fxTarget)
-        ? `<strong>Lectura en el blanco:</strong> f(${fmt(target.x)}) = ${fmt(fxTarget,3)}. Diferencia con el objetivo: ${fmt(diffTarget,3)}.`
-        : `<strong>Lectura en el blanco:</strong> x = ${fmt(target.x)} queda fuera del dominio actual.`,
-      hit
-        ? `<strong>Misión:</strong> la trayectoria pasa suficientemente cerca del blanco. ¡Puedes acertar!`
-        : `<strong>Consejo:</strong> ${Number.isFinite(diffTarget) ? (diffTarget>0 ? 'sube la curva (aumenta k o amplitud/potencia según el caso).' : 'baja la curva (reduce k o apertura/amplitud según el caso).') : 'ajusta h o n para recuperar dominio.'}`
-    ];
-    $('diagnosticsList').innerHTML = diagnostics.map(t=>`<div class="listItem">${t}</div>`).join('');
+  const pause = () => setRunning(false);
+  const reset = () => {
+    setRunning(false);
+    setProgress(0);
+    setParams(def.defaultParams);
+  };
 
-    const intervals = growthIntervals();
-    $('intervalList').innerHTML = intervals.map(t=>`<div class="listItem">${t}</div>`).join('');
+  const newTarget = () => {
+    const x = Number((Math.random() * 14 - 7).toFixed(1));
+    const y = Number((Math.random() * 12 - 4).toFixed(1));
+    setTarget({ x, y });
+    setProgress(0);
+    setRunning(false);
+  };
 
-    const parityItems = [
-      `<strong>Punto de prueba:</strong> x = ${fmt(probe.primary.x)} y -x = ${fmt(probe.mirror.x)}`,
-      `<strong>Valor 1:</strong> f(${fmt(probe.primary.x)}) = ${Number.isFinite(probe.primary.y) ? fmt(probe.primary.y,4) : 'fuera del dominio'}`,
-      `<strong>Valor 2:</strong> f(${fmt(probe.mirror.x)}) = ${Number.isFinite(probe.mirror.actualY) ? fmt(probe.mirror.actualY,4) : 'fuera del dominio'}`,
-      `<strong>Comparación ${probe.mode === 'even' ? 'par' : 'impar'}:</strong> ` +
-      (Number.isFinite(probe.primary.y) && Number.isFinite(probe.mirror.actualY)
-        ? `${probe.mode === 'even' ? 'se espera f(-x)=f(x)' : 'se espera f(-x)=-f(x)'}. Resultado: <span class="${probe.ok ? 'statusGood' : 'statusBad'}">${probe.ok ? 'cumple aproximadamente' : 'no cumple'}</span>`
-        : 'no se puede evaluar porque uno de los puntos queda fuera del dominio.'),
-      `<strong>Diagnóstico global:</strong> ${parity.label}. ${parity.reason}`
-    ];
-    $('parityHint').textContent = probe.mode === 'even'
-      ? 'Blancos espejo a la misma altura sugieren comportamiento par.'
-      : 'Blancos espejo con alturas opuestas sugieren comportamiento impar.';
-    $('parityList').innerHTML = parityItems.map(t=>`<div class="listItem">${t}</div>`).join('');
+  const dragTarget = (e) => {
+    const svg = e.currentTarget;
+    const rect = svg.getBoundingClientRect();
+    const px = ((e.clientX - rect.left) / rect.width) * VIEW.w;
+    const py = ((e.clientY - rect.top) / rect.height) * VIEW.h;
+    const x = VIEW.xMin + (px / VIEW.w) * (VIEW.xMax - VIEW.xMin);
+    const y = VIEW.yMax - (py / VIEW.h) * (VIEW.yMax - VIEW.yMin);
+    setTarget({ x: clamp(Number(x.toFixed(2)), VIEW.xMin, VIEW.xMax), y: clamp(Number(y.toFixed(2)), VIEW.yMin, VIEW.yMax) });
+  };
 
-    const tbody = $('valueTable');
-    const base = Math.round(target.x);
-    const xs = [base-3,base-2,base-1,base,base+1,base+2,base+3].filter(x=>x>=state.view.xMin && x<=state.view.xMax);
-    tbody.innerHTML = xs.map(x => {
-      const y = evaluateFunction(x);
-      const note = Math.abs(x-target.x) < .51 ? 'x cercano al blanco' : Number.isFinite(y) ? 'punto válido' : 'fuera del dominio';
-      return `<tr><td>${fmt(x)}</td><td>${Number.isFinite(y) ? fmt(y,4) : 'fuera del dominio'}</td><td>${note}</td></tr>`;
-    }).join('');
-  }
+  const targetTip = useMemo(() => {
+    const yAtTarget = def.eval(target.x, params);
+    if (!Number.isFinite(yAtTarget)) return "El blanco está fuera del dominio de esta función. Ajusta h, b o cambia de familia.";
+    const diff = target.y - yAtTarget;
+    if (Math.abs(diff) < 0.45) return "¡La trayectoria pasa por el blanco! Dispara para confirmar.";
+    if (diff > 0) return `La curva queda ${fmt(Math.abs(diff))} unidades por debajo del blanco: aumenta k, amplitud o pendiente.`;
+    return `La curva queda ${fmt(Math.abs(diff))} unidades por encima del blanco: reduce k, amplitud o pendiente.`;
+  }, [def, params, target]);
 
-  function updateAll(redraw=true){
-    updateDiagnostics();
-    if(redraw) drawScene(); else drawScene();
-  }
+  return (
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#dbeafe_0,#f8fafc_34%,#fdf2f8_100%)] p-4 text-slate-900 md:p-6">
+      <div className="mx-auto max-w-7xl space-y-5">
+        <motion.header
+          initial={{ opacity: 0, y: -12 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="overflow-hidden rounded-[2rem] border border-white/70 bg-white/75 p-5 shadow-xl backdrop-blur"
+        >
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-slate-950 px-3 py-1 text-xs font-bold uppercase tracking-wider text-cyan-200">
+                <Sparkles size={15} /> Laboratorio didáctico de funciones
+              </div>
+              <h1 className="text-3xl font-black tracking-tight text-slate-950 md:text-5xl">
+                Intersección de proyectiles y blancos
+              </h1>
+              <p className="mt-2 max-w-3xl text-sm leading-relaxed text-slate-600 md:text-base">
+                Ajusta parámetros, interpreta fórmula-tabla-gráfica, clasifica la función, revisa simetrías y encuentra la trayectoria que impacta el objetivo.
+              </p>
+            </div>
+            <div className="grid grid-cols-3 gap-2 rounded-3xl bg-slate-950 p-3 text-white shadow-lg">
+              <div className="rounded-2xl bg-white/10 p-3 text-center">
+                <div className="text-xs text-slate-300">Puntaje</div>
+                <div className="text-2xl font-black text-cyan-300">{score}</div>
+              </div>
+              <div className="rounded-2xl bg-white/10 p-3 text-center">
+                <div className="text-xs text-slate-300">Disparos</div>
+                <div className="text-2xl font-black text-fuchsia-300">{shots}</div>
+              </div>
+              <div className="rounded-2xl bg-white/10 p-3 text-center">
+                <div className="text-xs text-slate-300">Distancia</div>
+                <div className="text-2xl font-black text-amber-300">{fmt(minDist)}</div>
+              </div>
+            </div>
+          </div>
+        </motion.header>
 
-  function attachBasicEvents(){
-    functionType.addEventListener('change',()=>{ renderParamControls(); updateAll(); });
-    relationMode.addEventListener('change',updateAll);
-    ['targetX','targetY','probeX','parityMode'].forEach(id => $(id).addEventListener('input',updateAll));
-    $('fireBtn').addEventListener('click',fireProjectile);
-    $('randomTargetBtn').addEventListener('click',randomTarget);
-    $('resetScoreBtn').addEventListener('click',resetScore);
-    $('resetParamsBtn').addEventListener('click',resetParams);
+        <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
+          <aside className="space-y-4">
+            <section className="rounded-[2rem] border border-white/70 bg-white/80 p-4 shadow-xl backdrop-blur">
+              <div className="mb-3 flex items-center gap-2">
+                <Calculator className="text-fuchsia-600" />
+                <h2 className="text-xl font-black">Tipo de trayectoria</h2>
+              </div>
+              <select
+                value={family}
+                onChange={(e) => changeFamily(e.target.value)}
+                className="w-full rounded-2xl border border-slate-200 bg-white p-3 font-semibold outline-none ring-fuchsia-200 transition focus:ring-4"
+              >
+                {Object.entries(families).map(([key, f]) => (
+                  <option key={key} value={key}>{f.name}</option>
+                ))}
+              </select>
+              <div className="mt-3 rounded-2xl bg-slate-950 p-3 text-white">
+                <div className="text-xs font-bold uppercase tracking-wider text-cyan-300">Fórmula actual</div>
+                <div className="mt-1 break-words font-mono text-sm md:text-base">{def.formula(params)}</div>
+              </div>
+              <p className="mt-3 rounded-2xl bg-cyan-50 p-3 text-sm leading-relaxed text-slate-700">{def.help}</p>
+            </section>
 
-    scene.addEventListener('click',e=>{
-      const rect = scene.getBoundingClientRect();
-      const px = (e.clientX - rect.left)/rect.width * scene.width;
-      const py = (e.clientY - rect.top)/rect.height * scene.height;
-      const x = state.view.xMin + ((px-60)/(scene.width-120))*(state.view.xMax-state.view.xMin);
-      const y = state.view.yMax - ((py-50)/(scene.height-120))*(state.view.yMax-state.view.yMin);
-      if(px < 60 || px > scene.width-60 || py < 30 || py > scene.height-70) return;
-      $('targetX').value = clamp(x,state.view.xMin,state.view.xMax).toFixed(2);
-      $('targetY').value = clamp(y,state.view.yMin,state.view.yMax).toFixed(2);
-      updateAll();
-    });
-  }
+            <section className="rounded-[2rem] border border-white/70 bg-white/80 p-4 shadow-xl backdrop-blur">
+              <div className="mb-3 flex items-center gap-2">
+                <Gauge className="text-cyan-600" />
+                <h2 className="text-xl font-black">Parámetros</h2>
+              </div>
+              <div className="space-y-3">
+                <ParameterSlider label="a" value={params.a} min={-6} max={6} step={0.05} onChange={(v) => updateParam("a", v)} hint="escala, reflexión, amplitud" />
+                <ParameterSlider label="b" value={params.b} min={0.1} max={3} step={0.05} onChange={(v) => updateParam("b", v)} hint="compresión/frecuencia/ritmo" />
+                <ParameterSlider label="h" value={params.h} min={-8} max={8} step={0.1} onChange={(v) => updateParam("h", v)} hint="desplazamiento horizontal" />
+                <ParameterSlider label="k" value={params.k} min={-8} max={10} step={0.1} onChange={(v) => updateParam("k", v)} hint="desplazamiento vertical" />
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button onClick={running ? pause : fire} className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-fuchsia-600 px-4 py-3 font-black text-white shadow-lg shadow-fuchsia-200 transition hover:bg-fuchsia-700">
+                  {running ? <Pause size={19} /> : <Play size={19} />} {running ? "Pausar" : "Disparar"}
+                </button>
+                <button onClick={reset} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 font-bold text-white transition hover:bg-slate-700">
+                  <RefreshCw size={18} /> Reiniciar
+                </button>
+              </div>
+              <button onClick={newTarget} className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 font-bold text-slate-800 transition hover:bg-cyan-50">
+                <Target size={18} /> Nuevo blanco aleatorio
+              </button>
+            </section>
 
-  function init(){
-    renderParamControls();
-    attachBasicEvents();
-    updateAll();
-  }
+            <section className="rounded-[2rem] border border-white/70 bg-white/80 p-4 shadow-xl backdrop-blur">
+              <div className="mb-3 flex items-center gap-2">
+                <Activity className="text-emerald-600" />
+                <h2 className="text-xl font-black">Diagnóstico matemático</h2>
+              </div>
+              <div className="grid gap-2">
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <div className="text-xs font-bold uppercase tracking-wide text-slate-500">Clasificación</div>
+                  <div className="text-lg font-black">{def.name}</div>
+                  <div className="text-sm text-slate-600">{def.colorHint}; base: {def.base}</div>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <div className="text-xs font-bold uppercase tracking-wide text-slate-500">Paridad</div>
+                  <div className="text-lg font-black">{parity.label}</div>
+                  <div className="text-sm text-slate-600">{parity.reason}</div>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <div className="text-xs font-bold uppercase tracking-wide text-slate-500">Crecimiento/decrecimiento aproximado</div>
+                  <div className="mt-2 space-y-1">
+                    {intervals.length ? intervals.map((it, idx) => (
+                      <div key={idx} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 text-sm shadow-sm">
+                        <span className="font-semibold">{it.type}</span>
+                        <span className="font-mono text-slate-600">({fmt(it.from)}, {fmt(it.to)})</span>
+                      </div>
+                    )) : <div className="text-sm text-slate-500">No hay suficientes puntos válidos.</div>}
+                  </div>
+                </div>
+              </div>
+            </section>
+          </aside>
 
-  init();
-})();
-</script>
-</body>
-</html>
+          <main className="space-y-5">
+            <section className="rounded-[2rem] border border-white/70 bg-white/80 p-4 shadow-xl backdrop-blur">
+              <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Crosshair className="text-fuchsia-600" />
+                    <h2 className="text-2xl font-black">Campo de tiro cartesiano</h2>
+                  </div>
+                  <p className="text-sm text-slate-600">Haz clic en la gráfica para mover el blanco. Ganas cuando la curva pasa a menos de 0.45 unidades.</p>
+                </div>
+                <div className={`rounded-2xl px-4 py-2 text-sm font-black ${isHit ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                  {isHit ? "Trayectoria lista para impacto" : "Ajusta la función para interceptar"}
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-[1.7rem] border border-slate-200 bg-slate-950 shadow-inner">
+                <svg
+                  viewBox={`0 0 ${VIEW.w} ${VIEW.h}`}
+                  className="h-[430px] w-full cursor-crosshair md:h-[560px]"
+                  onClick={dragTarget}
+                >
+                  <defs>
+                    <linearGradient id="curveGrad" x1="0" x2="1" y1="0" y2="0">
+                      <stop offset="0%" stopColor="#38bdf8" />
+                      <stop offset="50%" stopColor="#e879f9" />
+                      <stop offset="100%" stopColor="#f59e0b" />
+                    </linearGradient>
+                    <radialGradient id="targetGlow">
+                      <stop offset="0%" stopColor="#fef08a" />
+                      <stop offset="50%" stopColor="#fb7185" />
+                      <stop offset="100%" stopColor="#e11d48" />
+                    </radialGradient>
+                    <filter id="glow">
+                      <feGaussianBlur stdDeviation="4" result="coloredBlur" />
+                      <feMerge>
+                        <feMergeNode in="coloredBlur" />
+                        <feMergeNode in="SourceGraphic" />
+                      </feMerge>
+                    </filter>
+                  </defs>
+
+                  {Array.from({ length: 21 }, (_, i) => VIEW.xMin + i).map((x) => (
+                    <g key={`x-${x}`}>
+                      <line x1={mapX(x)} x2={mapX(x)} y1="0" y2={VIEW.h} stroke={x === 0 ? "rgba(255,255,255,.55)" : "rgba(255,255,255,.09)"} strokeWidth={x === 0 ? 2 : 1} />
+                      {x !== 0 && <text x={mapX(x) + 3} y={mapY(0) + 16} fill="rgba(255,255,255,.45)" fontSize="11">{x}</text>}
+                    </g>
+                  ))}
+                  {Array.from({ length: 21 }, (_, i) => VIEW.yMin + i).map((y) => (
+                    <g key={`y-${y}`}>
+                      <line x1="0" x2={VIEW.w} y1={mapY(y)} y2={mapY(y)} stroke={y === 0 ? "rgba(255,255,255,.55)" : "rgba(255,255,255,.09)"} strokeWidth={y === 0 ? 2 : 1} />
+                      {y !== 0 && <text x={mapX(0) + 7} y={mapY(y) - 4} fill="rgba(255,255,255,.45)" fontSize="11">{y}</text>}
+                    </g>
+                  ))}
+
+                  {segments.map((seg, i) => (
+                    <path key={i} d={buildPath(seg, mapX, mapY)} fill="none" stroke="url(#curveGrad)" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" filter="url(#glow)" />
+                  ))}
+
+                  <line x1={mapX(target.x)} x2={mapX(target.x)} y1={mapY(target.y) - 34} y2={mapY(target.y) + 34} stroke="#fb7185" strokeWidth="2" strokeDasharray="5 5" opacity=".75" />
+                  <line x1={mapX(target.x) - 34} x2={mapX(target.x) + 34} y1={mapY(target.y)} y2={mapY(target.y)} stroke="#fb7185" strokeWidth="2" strokeDasharray="5 5" opacity=".75" />
+                  <motion.circle
+                    cx={mapX(target.x)}
+                    cy={mapY(target.y)}
+                    r="20"
+                    fill="none"
+                    stroke="#fb7185"
+                    strokeWidth="4"
+                    animate={{ scale: [1, 1.12, 1], opacity: [0.9, 1, 0.9] }}
+                    transition={{ repeat: Infinity, duration: 1.2 }}
+                    style={{ transformOrigin: `${mapX(target.x)}px ${mapY(target.y)}px` }}
+                  />
+                  <circle cx={mapX(target.x)} cy={mapY(target.y)} r="8" fill="url(#targetGlow)" stroke="white" strokeWidth="2" />
+                  <text x={mapX(target.x) + 16} y={mapY(target.y) - 18} fill="#fecdd3" fontSize="14" fontWeight="800">
+                    Blanco ({fmt(target.x)}, {fmt(target.y)})
+                  </text>
+
+                  {projectile && (
+                    <g>
+                      <motion.circle
+                        cx={mapX(projectile.x)}
+                        cy={mapY(projectile.y)}
+                        r="12"
+                        fill="#67e8f9"
+                        stroke="white"
+                        strokeWidth="3"
+                        filter="url(#glow)"
+                        animate={{ r: currentDistance <= 0.45 ? [12, 22, 12] : 12 }}
+                        transition={{ duration: 0.35 }}
+                      />
+                      <circle cx={mapX(projectile.x)} cy={mapY(projectile.y)} r="24" fill="rgba(103,232,249,.12)" />
+                    </g>
+                  )}
+
+                  <AnimatePresence>
+                    {isHit && progress > 0.82 && (
+                      <motion.g
+                        initial={{ opacity: 0, scale: 0.5 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0 }}
+                        style={{ transformOrigin: `${mapX(target.x)}px ${mapY(target.y)}px` }}
+                      >
+                        <circle cx={mapX(target.x)} cy={mapY(target.y)} r="48" fill="rgba(250,204,21,.25)" stroke="#facc15" strokeWidth="5" />
+                        <text x={mapX(target.x) - 58} y={mapY(target.y) - 55} fill="#fde68a" fontSize="24" fontWeight="900">¡Impacto!</text>
+                      </motion.g>
+                    )}
+                  </AnimatePresence>
+                </svg>
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <div className="text-xs font-bold uppercase tracking-wide text-slate-500">Misión</div>
+                  <div className="mt-1 text-sm leading-relaxed text-slate-700">Modifica la función hasta que pase por el blanco. Luego dispara.</div>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <div className="text-xs font-bold uppercase tracking-wide text-slate-500">Consejo algebraico</div>
+                  <div className="mt-1 text-sm leading-relaxed text-slate-700">{targetTip}</div>
+                </div>
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <div className="text-xs font-bold uppercase tracking-wide text-slate-500">Lectura gráfica</div>
+                  <div className="mt-1 text-sm leading-relaxed text-slate-700">Si la curva cruza el centro del blanco, entonces f({fmt(target.x)}) ≈ {fmt(target.y)}.</div>
+                </div>
+              </div>
+            </section>
+
+            <div className="grid gap-5 xl:grid-cols-2">
+              <section className="rounded-[2rem] border border-white/70 bg-white/80 p-4 shadow-xl backdrop-blur">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Table2 className="text-cyan-600" />
+                    <h2 className="text-xl font-black">Fórmula, tabla y gráfica</h2>
+                  </div>
+                  <button onClick={() => setShowTableAroundTarget((v) => !v)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold hover:bg-slate-50">
+                    {showTableAroundTarget ? "Ver tabla fija" : "Centrar en blanco"}
+                  </button>
+                </div>
+                <div className="rounded-2xl bg-slate-950 p-3 font-mono text-sm text-cyan-100">{def.formula(params)}</div>
+                <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-100 text-slate-600">
+                      <tr>
+                        <th className="px-3 py-2 text-left">x</th>
+                        <th className="px-3 py-2 text-left">f(x)</th>
+                        <th className="px-3 py-2 text-left">Lectura</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tableRows.map((r) => {
+                        const near = Math.abs(r.x - target.x) < 0.55;
+                        return (
+                          <tr key={r.x} className={near ? "bg-amber-50" : "bg-white"}>
+                            <td className="px-3 py-2 font-mono font-bold">{fmt(r.x)}</td>
+                            <td className="px-3 py-2 font-mono">{Number.isFinite(r.y) ? fmt(r.y, 3) : "fuera del dominio"}</td>
+                            <td className="px-3 py-2 text-slate-600">{near ? "x cercano al blanco" : Number.isFinite(r.y) ? "punto de la trayectoria" : "no pertenece al dominio"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="mt-3 rounded-2xl bg-cyan-50 p-3 text-sm leading-relaxed text-slate-700">
+                  Una misma función puede representarse con una fórmula, una tabla de valores y una gráfica. En el juego, las tres representaciones describen la misma trayectoria.
+                </div>
+              </section>
+
+              <section className="rounded-[2rem] border border-white/70 bg-white/80 p-4 shadow-xl backdrop-blur">
+                <div className="mb-3 flex items-center gap-2">
+                  <BarChart3 className="text-fuchsia-600" />
+                  <h2 className="text-xl font-black">¿Relación o función?</h2>
+                </div>
+                <select
+                  value={relation}
+                  onChange={(e) => setRelation(e.target.value)}
+                  className="mb-3 w-full rounded-2xl border border-slate-200 bg-white p-3 font-semibold outline-none ring-fuchsia-200 transition focus:ring-4"
+                >
+                  {Object.entries(relationExamples).map(([key, item]) => (
+                    <option key={key} value={key}>{item.name}</option>
+                  ))}
+                </select>
+                <MiniRelation kind={relation} curvePoints={points} />
+                <div className={`mt-3 rounded-2xl p-3 ${relationExamples[relation].isFunction ? "bg-emerald-50" : "bg-rose-50"}`}>
+                  <div className={`text-lg font-black ${relationExamples[relation].isFunction ? "text-emerald-700" : "text-rose-700"}`}>
+                    {relationExamples[relation].isFunction ? "Sí es función" : "No es función"}
+                  </div>
+                  <div className="text-sm leading-relaxed text-slate-700">{relationExamples[relation].reason}</div>
+                </div>
+              </section>
+            </div>
+
+            <section className="rounded-[2rem] border border-white/70 bg-white/80 p-4 shadow-xl backdrop-blur">
+              <div className="mb-3 flex items-center gap-2">
+                <Trophy className="text-amber-500" />
+                <h2 className="text-xl font-black">Misiones de aprendizaje</h2>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                {[
+                  ["Representar", "Explica la trayectoria con fórmula, tabla y gráfica."],
+                  ["Función", "Usa la prueba de la recta vertical para decidir."],
+                  ["Paridad", "Busca simetría respecto al eje y o al origen."],
+                  ["Clasificar", "Reconoce lineal, cuadrática, sinusoidal, exponencial, raíz, absoluta o cúbica."],
+                  ["Manipular", "Ajusta a, b, h y k hasta interceptar el blanco."],
+                ].map(([title, text], idx) => (
+                  <motion.div
+                    key={title}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: idx * 0.05 }}
+                    className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+                  >
+                    <div className="mb-2 flex h-9 w-9 items-center justify-center rounded-2xl bg-slate-950 font-black text-cyan-300">{idx + 1}</div>
+                    <div className="font-black text-slate-900">{title}</div>
+                    <div className="mt-1 text-sm leading-relaxed text-slate-600">{text}</div>
+                  </motion.div>
+                ))}
+              </div>
+            </section>
+          </main>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+  
